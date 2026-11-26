@@ -30,34 +30,36 @@ python3 analyse_variance.py input.json
   "fiscal_period": "FY2026 Q2",
   "currency": "USD",
   "periods": ["Apr 26", "May 26", "Jun 26"],
-  "filters": {"region": "EMEA", "department": null, "account": null,
+  "filters": {"region": "NORTHERN-EUROPE", "department": null, "account": null,
               "cost_center": null, "period_from": "2026-04", "period_to": "2026-06"},
   "queries": [
-    {"level": "B", "role": "actual", "period": "Apr 26",
-     "entity": "Elecar EURO", "region": "EMEA", "region_name": "EMEA",
-     "rows": [ ...the "results" array from sql_query, untouched... ]},
-    {"level": "B", "role": "plan", "period": "Apr 26",
-     "entity": "Elecar EURO", "region": "EMEA", "region_name": "EMEA",
-     "rows": [ ...results of the same query for Apr 25... ]}
+    {"level": "B", "entity": "Elecar Northern Europe", "region": "NORTHERN-EUROPE",
+     "region_name": "Northern Europe",
+     "rows": [ ...the "results" array from the current-months query, untouched... ]},
+    {"level": "B", "entity": "Elecar Northern Europe", "region": "NORTHERN-EUROPE",
+     "region_name": "Northern Europe",
+     "rows": [ ...the "results" array from the baseline-months query, untouched... ]}
   ]
 }
 ```
 
-One entry in `queries` per `sql_query` call:
+`periods` (the current months) is required. One entry in `queries` per `sql_query` call:
 
 | Field | Meaning |
 |---|---|
 | `level` | `A` regions (rows have `e3 entity`), `B` departments (rows have `d3 department`), `C` accounts (rows have `account is hierarchy`) |
-| `role` | `actual` for the current period, `plan` for the baseline |
-| `period` | The **actual** month this pairs with. For a baseline query on `Apr 25`, still write `Apr 26`. |
 | `entity` | The `e3 entity` value you sliced to (levels B and C) |
-| `region`, `region_name` | Label to group under, e.g. `EMEA` (optional; both EURO and Northern Europe queries can share `EMEA` and are summed) |
+| `region`, `region_name` | Label and display name for that entity (levels B and C; level A derives them) |
 | `department` | The `d3 department` value you sliced to (level C only) |
 | `rows` | The `results` array exactly as returned. Do not edit, round, filter or de-duplicate it. |
 
-The script handles Chimera's duplicate rows, sums several entities that share a
-region label, keeps only operating-expense accounts at level C, and pairs actual
-and baseline rows.
+Each row's `time` decides its side: a month in `periods` is actual, the same month
+a year earlier is the baseline (`plan`). So a level-A query holding both years is
+one entry. Only for a baseline from another version (same months) add
+`"role": "plan"` to that entry, and `"role": "actual"` to the other.
+
+The script removes Chimera's duplicate rows, keeps only operating-expense
+accounts at level C, and pairs actual and baseline rows.
 
 ## What it computes (contract v1.0 rules)
 

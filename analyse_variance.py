@@ -232,26 +232,48 @@ def is_opex_account(label):
     return label in OPEX_ACCOUNTS
 
 
-def rows_from_queries(queries):
+def shift_year(period, years):
+    y, m = period.split("-")
+    return f"{int(y) + years:04d}-{m}"
+
+
+def rows_from_queries(queries, periods):
     """Turn raw sql_query results into paired plan/actual ROWs, grouped by level.
 
-    Each query = {"level": "A"|"B"|"C", "role": "actual"|"plan",
-                  "period": <ACTUAL month this pairs with, e.g. "Apr 26">,
+    Each query = {"level": "A"|"B"|"C",
                   "entity": "Elecar EURO" (B/C), "region": "EURO" (optional),
                   "department": "Field Marketing" (C only),
+                  "role": "actual"|"plan" (optional, see below),
                   "rows": <the "results" array returned by sql_query>}
+
+    Rows carry their month in "time". Without "role", a row whose month is one of
+    `periods` is actual, and a row one year earlier is the baseline (plan), so one
+    query can hold both years. With "role", every row is that side; a baseline
+    from another version uses the same months, a prior-year one the months a year
+    earlier. Old-style queries with a single "period" and no "time" still work.
     """
+    current = {to_period(p) for p in periods}
     paired = {lvl: OrderedDict() for lvl in LEVEL_KEYS}
     for q in queries:
-        lvl, role = q["level"], q["role"]
+        lvl = q["level"]
         seen = set()
         dim = {"A": "e3 entity", "B": "d3 department", "C": "account is hierarchy"}[lvl]
         for raw in q.get("rows") or []:
-            # Chimera can return a row twice, and the copies may differ in the last
-            # float digit, so de-duplicate on the dimension member, never the value.
-            if raw[dim] in seen:
+            month = to_period(raw.get("time") or q["period"])
+            if q.get("role"):
+                role = q["role"]
+                period = month if month in current else shift_year(month, 1)
+            elif month in current:
+                role, period = "actual", month
+            else:
+                role, period = "plan", shift_year(month, 1)
+            if period not in current:
                 continue
-            seen.add(raw[dim])
+            # Chimera can return a row twice, and the copies may differ in the last
+            # float digit, so de-duplicate on (month, member), never on the value.
+            if (month, raw[dim]) in seen:
+                continue
+            seen.add((month, raw[dim]))
             amount = float(raw.get("reporting amounts") or 0)
             if lvl == "A":
                 entity = raw["e3 entity"]
@@ -264,9 +286,9 @@ def rows_from_queries(queries):
                 region = q.get("region") or code(entity)
                 if not is_opex_account(account):
                     continue
-            key = (q["period"], entity, dept, account)
+            key = (period, entity, dept, account)
             row = paired[lvl].setdefault(key, {
-                "period": q["period"], "entity": entity, "region": region,
+                "period": period, "entity": entity, "region": region,
                 "region_name": q.get("region_name") or (re.sub(r"^Elecar\s+", "", entity) if lvl == "A" else region),
                 "department": dept, "department_group": DEPARTMENT_GROUPS.get(dept, dept),
                 "account": account, "plan": 0.0, "actual": 0.0})
@@ -276,7 +298,9 @@ def rows_from_queries(queries):
 
 def analyse(doc):
     if doc.get("queries"):
-        doc = dict(doc, **rows_from_queries(doc["queries"]))
+        if not doc.get("periods"):
+            raise ValueError('"periods" (the actual months, e.g. ["Apr 26", "May 26", "Jun 26"]) is required with "queries"')
+        doc = dict(doc, **rows_from_queries(doc["queries"], doc["periods"]))
     levels = {"A": clean(doc.get("region_rows"), "A"),
               "B": clean(doc.get("department_rows"), "B"),
               "C": clean(doc.get("account_rows"), "C")}
